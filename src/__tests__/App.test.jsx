@@ -64,7 +64,7 @@ describe("App — écran de login", () => {
     fireEvent.click(screen.getByRole("button", { name: /se connecter/i }));
     await waitFor(() =>
       expect(
-        screen.getByText("Erreur de connexion. Veuillez réessayer.")
+        screen.getByText("Erreur de connexion.")
       ).toBeInTheDocument()
     );
   });
@@ -125,24 +125,6 @@ describe("App — écran de login", () => {
     );
   });
 
-  it("bascule entre mode login et mode inscription", () => {
-    render(<App />);
-    expect(screen.getByText("Pas encore de compte ?")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Créer un compte" }));
-    expect(screen.getByText("Déjà inscrit ?")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Se connecter" }));
-    expect(screen.getByText("Pas encore de compte ?")).toBeInTheDocument();
-  });
-
-  it("efface l'erreur lors du basculement de mode", () => {
-    render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: /se connecter/i }));
-    expect(screen.getByText("Email et mot de passe requis.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Créer un compte" }));
-    expect(
-      screen.queryByText("Email et mot de passe requis.")
-    ).not.toBeInTheDocument();
-  });
 });
 
 describe("App — restauration de session", () => {

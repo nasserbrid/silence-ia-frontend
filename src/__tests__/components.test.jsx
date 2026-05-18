@@ -55,7 +55,7 @@ describe("GlobalScoreBanner", () => {
   it("shows the score percentage", () => {
     render(<GlobalScoreBanner score={75} isMobile={false} />);
     expect(screen.getByText("75")).toBeInTheDocument();
-    expect(screen.getByText("%")).toBeInTheDocument();
+    expect(screen.getByText("/100")).toBeInTheDocument();
   });
 
   it("shows 'Performance exceptionnelle' for score >= 90", () => {

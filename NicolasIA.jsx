@@ -352,6 +352,9 @@ export default function App() {
   const recordingTimeRef = useRef(0);
   const micTestRecRef = useRef(null);
 
+  const [showChangePwd, setShowChangePwd] = useState(false);
+  const [adminUsers, setAdminUsers] = useState([]);
+
   useEffect(() => {
     const token = localStorage.getItem("nicolas-ia-token");
     if (!token) return;
@@ -362,8 +365,8 @@ export default function App() {
         setUser(u); setPhase("welcome");
         return fetch("/api/history", { headers: { Authorization: "Bearer " + token } });
       })
-      .then((r) => r?.json())
-      .then((data) => { if (data) setHistory(data.map(transformSession)); })
+      .then((r) => r?.ok ? r.json() : null)
+      .then((data) => { if (Array.isArray(data)) setHistory(data.map(transformSession)); })
       .catch(() => {});
   }, []);
 
@@ -383,8 +386,7 @@ export default function App() {
       const u = await me.json();
       setUser(u); setPhase("welcome");
       const h = await fetch("/api/history", { headers: { Authorization: "Bearer " + data.access_token } });
-      const hdata = await h.json();
-      setHistory(hdata.map(transformSession));
+      if (h.ok) { const hdata = await h.json(); setHistory(hdata.map(transformSession)); }
     } catch (e) { setError("Erreur de connexion."); }
   };
 
@@ -421,6 +423,42 @@ export default function App() {
     const token = localStorage.getItem("nicolas-ia-token");
     await Promise.all(history.map((s) => fetch("/api/history/" + s.id, { method: "DELETE", headers: { Authorization: "Bearer " + token } })));
     setHistory([]); setViewingSession(null);
+  };
+
+  const loadAdminUsers = async () => {
+    const token = localStorage.getItem("nicolas-ia-token");
+    try {
+      const r = await fetch("/admin/users", { headers: { Authorization: "Bearer " + token } });
+      if (r.ok) setAdminUsers(await r.json());
+    } catch (e) {}
+  };
+
+  const handleAdminCreateUser = async ({ email, password, role }) => {
+    const token = localStorage.getItem("nicolas-ia-token");
+    const r = await fetch("/admin/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ email, password, role }),
+    });
+    if (r.ok) await loadAdminUsers();
+    return r;
+  };
+
+  const handleAdminPatchUser = async (id, patch) => {
+    const token = localStorage.getItem("nicolas-ia-token");
+    const r = await fetch("/admin/users/" + id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify(patch),
+    });
+    if (r.ok) await loadAdminUsers();
+  };
+
+  const handleAdminDeleteUser = async (id) => {
+    if (!window.confirm("Supprimer cet utilisateur ?")) return;
+    const token = localStorage.getItem("nicolas-ia-token");
+    const r = await fetch("/admin/users/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+    if (r.ok) await loadAdminUsers();
   };
 
   const submitSetup = () => {
@@ -827,7 +865,12 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: isMobile ? 6 : 10, flexWrap: "wrap", alignItems: "center" }}>
               {user && !isMobile && <span style={{ fontSize: 12, color: COLOR_TEXT_MUTED }}>{user.email}</span>}
-              {phase !== "recording" && phase !== "analyzing" && phase !== "history" && phase !== "welcome" && (
+              {user?.role === "admin" && phase !== "recording" && phase !== "analyzing" && phase !== "admin" && (
+                <button style={M({ ...styles.btn, ...styles.btnSecondary, borderColor: COLOR_GOLD + "88" }, { padding: "8px 10px", fontSize: 13 })} onClick={() => { loadAdminUsers(); setPhase("admin"); }}>
+                  {isMobile ? "👑" : "👑 Admin"}
+                </button>
+              )}
+              {phase !== "recording" && phase !== "analyzing" && phase !== "history" && phase !== "welcome" && phase !== "admin" && (
                 <button style={M({ ...styles.btn, ...styles.btnSecondary }, { padding: "8px 10px", fontSize: 13, gap: 5 })} onClick={() => { setViewingSession(null); setPhase("history"); }}>
                   <HistoryIcon size={15} />{isMobile ? (history.length > 0 ? history.length : "") : (" Historique" + (history.length > 0 ? " (" + history.length + ")" : ""))}
                 </button>
@@ -839,6 +882,16 @@ export default function App() {
               {phase === "history" && (
                 <button style={M({ ...styles.btn, ...styles.btnSecondary }, { padding: "8px 10px", fontSize: 13 })} onClick={() => { setViewingSession(null); setPhase("welcome"); }}>
                   <ChevronLeft size={15} />{!isMobile && " Retour"}
+                </button>
+              )}
+              {phase === "admin" && (
+                <button style={M({ ...styles.btn, ...styles.btnSecondary }, { padding: "8px 10px", fontSize: 13 })} onClick={() => setPhase("welcome")}>
+                  <ChevronLeft size={15} />{!isMobile && " Retour"}
+                </button>
+              )}
+              {user && (phase === "welcome" || phase === "admin") && (
+                <button style={{ ...styles.btn, background: "transparent", color: COLOR_TEXT_MUTED, fontSize: isMobile ? 11 : 12, padding: isMobile ? "6px 8px" : undefined }} onClick={() => setShowChangePwd(true)}>
+                  {isMobile ? "🔑" : "Mot de passe"}
                 </button>
               )}
               {user && phase === "welcome" && (
@@ -1138,6 +1191,177 @@ export default function App() {
         {phase === "history" && (
           <HistoryView history={history} viewingSession={viewingSession} setViewingSession={setViewingSession} renderMarkdown={renderMarkdown} downloadPDF={downloadPDF} deleteSession={deleteSession} clearAllHistory={clearAllHistory} isMobile={isMobile} />
         )}
+
+        {/* ===== ADMIN ===== */}
+        {phase === "admin" && (
+          <AdminView users={adminUsers} currentUserId={user?.id} onCreateUser={handleAdminCreateUser} onPatchUser={handleAdminPatchUser} onDeleteUser={handleAdminDeleteUser} isMobile={isMobile} />
+        )}
+      </div>
+
+      {/* ===== MODAL CHANGEMENT MDP ===== */}
+      {showChangePwd && (
+        <PasswordModal onClose={() => setShowChangePwd(false)} token={localStorage.getItem("nicolas-ia-token")} />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// COMPOSANT : ADMIN
+// ============================================================
+function AdminView({ users, currentUserId, onCreateUser, onPatchUser, onDeleteUser, isMobile }) {
+  const M = (d, m) => isMobile ? { ...d, ...m } : d;
+  const [newEmail, setNewEmail] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [newRole, setNewRole] = useState("user");
+  const [formError, setFormError] = useState("");
+  const [formSuccess, setFormSuccess] = useState("");
+
+  const handleCreate = async () => {
+    setFormError(""); setFormSuccess("");
+    if (!newEmail || !newPwd) { setFormError("Email et mot de passe requis."); return; }
+    const r = await onCreateUser({ email: newEmail, password: newPwd, role: newRole });
+    if (r.ok) {
+      setFormSuccess("Utilisateur créé."); setNewEmail(""); setNewPwd(""); setNewRole("user");
+    } else {
+      const d = await r.json().catch(() => ({}));
+      setFormError(d.detail || "Erreur lors de la création.");
+    }
+  };
+
+  return (
+    <div className="fade-in-up">
+      <h2 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 700, margin: "0 0 4px" }}>
+        Gestion des utilisateurs <span style={{ color: COLOR_GOLD }}>👑</span>
+      </h2>
+      <p style={{ color: COLOR_TEXT_MUTED, fontSize: 13, margin: "0 0 24px" }}>{users.length} compte{users.length > 1 ? "s" : ""}</p>
+
+      {/* Tableau des utilisateurs */}
+      <div className="nia-table-wrap" style={{ marginBottom: 32 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: isMobile ? 12 : 13 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #c9a96133" }}>
+              {["Email", "Rôle", "Actif", "Créé le", "Actions"].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "8px 10px", color: COLOR_GOLD, fontWeight: 700, textTransform: "uppercase", fontSize: 11, letterSpacing: "0.08em" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id} style={{ borderBottom: "1px solid #c9a96111", opacity: u.is_active ? 1 : 0.5 }}>
+                <td style={{ padding: "10px 10px", color: u.id === currentUserId ? COLOR_GOLD : COLOR_TEXT }}>
+                  {u.email}{u.id === currentUserId && <span style={{ fontSize: 10, marginLeft: 6, color: COLOR_TEXT_MUTED }}>(vous)</span>}
+                </td>
+                <td style={{ padding: "10px 10px" }}>
+                  <span style={{ background: u.role === "admin" ? COLOR_GOLD + "22" : "#ffffff11", color: u.role === "admin" ? COLOR_GOLD : COLOR_TEXT_MUTED, border: "1px solid " + (u.role === "admin" ? COLOR_GOLD + "66" : "#ffffff22"), borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
+                    {u.role}
+                  </span>
+                </td>
+                <td style={{ padding: "10px 10px" }}>
+                  <span style={{ color: u.is_active ? "#22c55e" : "#ef4444", fontWeight: 600, fontSize: 12 }}>{u.is_active ? "Oui" : "Non"}</span>
+                </td>
+                <td style={{ padding: "10px 10px", color: COLOR_TEXT_MUTED, whiteSpace: "nowrap" }}>
+                  {new Date(u.created_at).toLocaleDateString("fr-FR")}
+                </td>
+                <td style={{ padding: "10px 10px" }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      style={{ ...styles.btn, padding: "5px 10px", fontSize: 11, background: "#ffffff11", color: COLOR_TEXT, border: "1px solid #ffffff22" }}
+                      onClick={() => onPatchUser(u.id, { is_active: !u.is_active })}
+                    >
+                      {u.is_active ? "Désactiver" : "Activer"}
+                    </button>
+                    {u.id !== currentUserId && (
+                      <button
+                        style={{ ...styles.btn, padding: "5px 10px", fontSize: 11, background: "#dc262626", color: "#fca5a5", border: "1px solid #dc262666" }}
+                        onClick={() => onDeleteUser(u.id)}
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Formulaire création */}
+      <div style={{ background: "#0f0f0fcc", border: "1px solid #c9a96133", borderRadius: 12, padding: isMobile ? "16px 14px" : "24px 28px", maxWidth: 520 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 16px", color: COLOR_GOLD }}>Créer un compte</h3>
+        <label style={styles.label}>Email</label>
+        <input type="email" placeholder="nouveau@exemple.com" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} style={{ ...styles.input, fontSize: isMobile ? 16 : 14 }} />
+        <label style={styles.label}>Mot de passe</label>
+        <input type="password" placeholder="Minimum 4 caractères" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} style={{ ...styles.input, fontSize: isMobile ? 16 : 14 }} />
+        <label style={styles.label}>Rôle</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          {["user", "admin"].map((r) => (
+            <button key={r} style={{ ...styles.btn, ...styles.selectOption, ...(newRole === r ? styles.selectOptionActive : {}), padding: "10px 20px" }} onClick={() => setNewRole(r)}>
+              {r === "admin" ? "👑 Admin" : "Utilisateur"}
+            </button>
+          ))}
+        </div>
+        {formError && <div style={styles.error}><AlertCircle size={13} /> {formError}</div>}
+        {formSuccess && <div style={{ padding: 10, background: "#10b98122", border: "1px solid #10b98166", borderRadius: 8, color: "#6ee7b7", fontSize: 13, marginBottom: 12 }}>✓ {formSuccess}</div>}
+        <button style={{ ...styles.btn, ...styles.btnPrimary, width: "100%", justifyContent: "center" }} onClick={handleCreate}>
+          Créer le compte
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// COMPOSANT : MODAL CHANGEMENT MOT DE PASSE
+// ============================================================
+function PasswordModal({ onClose, token }) {
+  const [pwd, setPwd] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    setError("");
+    if (!pwd) { setError("Mot de passe requis."); return; }
+    if (pwd.length < 4) { setError("Minimum 4 caractères."); return; }
+    if (pwd !== confirm) { setError("Les mots de passe ne correspondent pas."); return; }
+    setLoading(true);
+    try {
+      const r = await fetch("/auth/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ password: pwd }),
+      });
+      if (r.ok) { setSuccess(true); setTimeout(onClose, 1500); }
+      else { const d = await r.json().catch(() => ({})); setError(d.detail || "Erreur lors du changement."); }
+    } catch (e) { setError("Erreur réseau."); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div style={{ background: "#0f0f0f", border: "1px solid #c9a96166", borderRadius: 14, padding: "28px 28px", width: "100%", maxWidth: 400, boxShadow: "0 0 40px #c9a96122" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: COLOR_TEXT }}>Changer le mot de passe</h3>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: COLOR_TEXT_MUTED, cursor: "pointer", fontSize: 22, lineHeight: 1, padding: "0 4px" }}>×</button>
+        </div>
+        {success ? (
+          <div style={{ padding: 12, background: "#10b98122", border: "1px solid #10b98166", borderRadius: 8, color: "#6ee7b7", textAlign: "center", fontSize: 14 }}>✓ Mot de passe mis à jour !</div>
+        ) : (<>
+          <label style={styles.label}>Nouveau mot de passe</label>
+          <input type="password" placeholder="Minimum 4 caractères" value={pwd} onChange={(e) => setPwd(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={{ ...styles.input, fontSize: 14 }} />
+          <label style={styles.label}>Confirmer</label>
+          <input type="password" placeholder="Répéter le mot de passe" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSubmit()} style={{ ...styles.input, fontSize: 14 }} />
+          {error && <div style={styles.error}><AlertCircle size={13} /> {error}</div>}
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <button style={{ ...styles.btn, ...styles.btnSecondary, flex: 1, justifyContent: "center" }} onClick={onClose}>Annuler</button>
+            <button style={{ ...styles.btn, ...styles.btnPrimary, flex: 1, justifyContent: "center" }} onClick={handleSubmit} disabled={loading}>
+              {loading ? <Loader2 size={14} /> : "Enregistrer"}
+            </button>
+          </div>
+        </>)}
       </div>
     </div>
   );
@@ -1220,3 +1444,5 @@ function HistoryView({ history, viewingSession, setViewingSession, renderMarkdow
     </div>
   );
 }
+
+export { MicBanner, AnalyzingScreen, GlobalScoreBanner };
