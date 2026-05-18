@@ -4,9 +4,8 @@
 // ============================================================
 
 import React, { useState, useRef, useEffect } from "react";
-import { applyMob, transformSession, extractScore, extractCitation, extractSynthese, fmtTime } from "./src/utils.js";
 
-// La clé API est gérée côté serveur
+// Clé API gérée côté serveur uniquement
 const STORAGE_KEY = "nicolas-ia-history";
 const USER_KEY = "nicolas-ia-user";
 const MIN_RECORDING_SEC = 60;
@@ -150,7 +149,7 @@ if (typeof document !== "undefined" && !document.getElementById("nicolas-ia-anim
 
 const TYPES_DISCOURS = [
   { id: "pitch", label: "Pitch", icon: "🎯", desc: "Convaincre, présenter un projet" },
-  { id: "presentation_pro", label: "Présentation pro", icon: "💼", desc: "Présentation interne, comité" },
+  { id: "presentation_pro", label: "Présentation professionnelle", icon: "💼", desc: "Présentation interne, comité" },
   { id: "reunion", label: "Réunion", icon: "🤝", desc: "Prise de parole en réunion d'équipe" },
   { id: "storytelling", label: "Storytelling", icon: "📖", desc: "Récit personnel, parcours" },
   { id: "officiel", label: "Officiel", icon: "🏛️", desc: "Discours institutionnel, cérémonie" },
@@ -164,6 +163,10 @@ const ANALYZING_STEPS = [
   { label: "Génération du rapport", icon: "✨", duration: 2500 },
 ];
 
+// Utilitaire : fusionne style desktop + override mobile proprement
+// Ne touche JAMAIS au style desktop si isMobile === false
+const applyMob = (isMobile, desktop, mobileExtra) =>
+  isMobile ? { ...desktop, ...mobileExtra } : desktop;
 
 // ============================================================
 // COMPOSANT : BANNIÈRE MICRO
@@ -189,7 +192,7 @@ function MicBanner({ isMobile }) {
           🎧 Équipez-vous avant de commencer
         </div>
         <div style={{ fontSize: isMobile ? 12 : 13, color: COLOR_TEXT, lineHeight: 1.55 }}>
-          Portez des <strong style={{ color: COLOR_GOLD_LIGHT }}>écouteurs avec micro</strong> ou un <strong style={{ color: COLOR_GOLD_LIGHT }}>micro USB</strong>. Le micro intégré capte mal la voix à distance.
+          Portez des <strong style={{ color: COLOR_GOLD_LIGHT }}>écouteurs avec micro</strong> ou un <strong style={{ color: COLOR_GOLD_LIGHT }}>micro USB</strong>. Le micro intégré peut mal capter la voix à distance.
         </div>
       </div>
       <button onClick={() => setDismissed(true)} style={{ background: "transparent", border: "none", color: COLOR_TEXT_MUTED, cursor: "pointer", fontSize: 22, lineHeight: 1, padding: "0 2px", flexShrink: 0, touchAction: "manipulation" }}>×</button>
@@ -275,7 +278,7 @@ function GlobalScoreBanner({ score, syntheseLine, isMobile }) {
           <circle cx={sz / 2} cy={sz / 2} r={r} fill="none" stroke={color} strokeWidth="8" strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: "stroke-dashoffset 1.5s ease-out", filter: "drop-shadow(0 0 8px " + color + "88)" }} />
         </svg>
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ fontSize: isMobile ? 30 : 38, fontWeight: 700, color, lineHeight: 1 }}>{pct}<span style={{ fontSize: isMobile ? 16 : 22, marginLeft: 1 }}>%</span></div>
+          <div style={{ fontSize: isMobile ? 30 : 38, fontWeight: 700, color, lineHeight: 1 }}>{pct}<span style={{ fontSize: isMobile ? 14 : 18, marginLeft: 2, opacity: 0.7 }}>/100</span></div>
           <div style={{ fontSize: 10, color: COLOR_TEXT_MUTED, marginTop: 3, letterSpacing: "0.05em", textTransform: "uppercase" }}>Score global</div>
         </div>
       </div>
@@ -290,6 +293,18 @@ function GlobalScoreBanner({ score, syntheseLine, isMobile }) {
   );
 }
 
+const transformSession = (s) => ({
+  id: s.id,
+  date: s.created_at,
+  typeDiscours: s.type_discours,
+  typeDiscoursLabel: s.type_discours_label,
+  dureeMinPrevue: s.duree_prevue_min,
+  dureeEffectiveSec: s.duree_effective_sec,
+  transcription: s.transcription,
+  analyse: s.analyse,
+  wordCount: s.word_count,
+});
+
 // ============================================================
 // COMPOSANT PRINCIPAL
 // ============================================================
@@ -301,8 +316,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [loginMode, setLoginMode] = useState("login");
-  // apiKey gérée côté serveur
   const [stream, setStream] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
   const [analysis, setAnalysis] = useState("");
@@ -317,6 +330,8 @@ export default function App() {
   const [viewingSession, setViewingSession] = useState(null);
   const [liveVisual, setLiveVisual] = useState({ regard: 0, posture: 0, gestuelle: 0, sourire: 0 });
   const [mediapipeReady, setMediapipeReady] = useState(false);
+  const [micTestPhase, setMicTestPhase] = useState(false); // true = test micro en cours
+  const [micTestWord, setMicTestWord] = useState(false);   // true = un mot a été capté
 
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -333,22 +348,24 @@ export default function App() {
   const liveVisualRef = useRef({ regard: 0, posture: 0, gestuelle: 0, sourire: 0 });
   const animationFrameRef = useRef(null);
   const transcriptStateRef = useRef({ recording: false });
+  const stoppingRef = useRef(false);
+  const recordingTimeRef = useRef(0);
+  const micTestRecRef = useRef(null);
 
   useEffect(() => {
     const token = localStorage.getItem("nicolas-ia-token");
     if (!token) return;
     fetch("/auth/me", { headers: { Authorization: "Bearer " + token } })
-      .then(r => r.ok ? r.json() : null)
-      .then(u => {
+      .then((r) => r.ok ? r.json() : null)
+      .then((u) => {
         if (!u) { localStorage.removeItem("nicolas-ia-token"); return; }
         setUser(u); setPhase("welcome");
-        fetch("/api/history", { headers: { Authorization: "Bearer " + token } })
-          .then(r => r.ok ? r.json() : [])
-          .then(sessions => setHistory(sessions.map(transformSession)));
+        return fetch("/api/history", { headers: { Authorization: "Bearer " + token } });
       })
-      .catch(() => localStorage.removeItem("nicolas-ia-token"));
+      .then((r) => r?.json())
+      .then((data) => { if (data) setHistory(data.map(transformSession)); })
+      .catch(() => {});
   }, []);
-
 
   const handleLogin = async () => {
     setError("");
@@ -359,21 +376,19 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: loginEmail, password: loginPassword }),
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); setError(e.detail || "Identifiants incorrects."); return; }
-      const { access_token } = await res.json();
-      localStorage.setItem("nicolas-ia-token", access_token);
-      const meRes = await fetch("/auth/me", { headers: { Authorization: "Bearer " + access_token } });
-      const u = await meRes.json();
-      setUser(u);
-      const hRes = await fetch("/api/history", { headers: { Authorization: "Bearer " + access_token } });
-      const sessions = hRes.ok ? await hRes.json() : [];
-      setHistory(sessions.map(transformSession));
-      setLoginEmail(""); setLoginPassword(""); setPhase("welcome");
-    } catch (err) { setError("Erreur de connexion. Veuillez réessayer."); }
+      if (!res.ok) { setError("Identifiants incorrects."); return; }
+      const data = await res.json();
+      localStorage.setItem("nicolas-ia-token", data.access_token);
+      const me = await fetch("/auth/me", { headers: { Authorization: "Bearer " + data.access_token } });
+      const u = await me.json();
+      setUser(u); setPhase("welcome");
+      const h = await fetch("/api/history", { headers: { Authorization: "Bearer " + data.access_token } });
+      const hdata = await h.json();
+      setHistory(hdata.map(transformSession));
+    } catch (e) { setError("Erreur de connexion."); }
   };
 
   const handleLogout = () => {
-    if (!window.confirm("Se déconnecter ?")) return;
     localStorage.removeItem("nicolas-ia-token");
     setUser(null); setHistory([]); setPhase("login");
   };
@@ -381,30 +396,31 @@ export default function App() {
   const saveHistory = async (session) => {
     const token = localStorage.getItem("nicolas-ia-token");
     try {
-      const res = await fetch("/api/history", {
+      await fetch("/api/history", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
         body: JSON.stringify(session),
       });
-      if (res.ok) { const saved = await res.json(); setHistory(prev => [transformSession(saved), ...prev]); }
+      const h = await fetch("/api/history", { headers: { Authorization: "Bearer " + token } });
+      const data = await h.json();
+      setHistory(data.map(transformSession));
     } catch (e) {}
   };
+
   const deleteSession = async (id) => {
-    if (!window.confirm("Supprimer cette analyse ?")) return;
     const token = localStorage.getItem("nicolas-ia-token");
     try {
       await fetch("/api/history/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
-      setHistory(prev => prev.filter(s => s.id !== id));
-      if (viewingSession?.id === id) setViewingSession(null);
+      setHistory((prev) => prev.filter((s) => s.id !== id));
+      setViewingSession(null);
     } catch (e) {}
   };
+
   const clearAllHistory = async () => {
     if (!window.confirm("Supprimer TOUTES les analyses ?")) return;
     const token = localStorage.getItem("nicolas-ia-token");
-    try {
-      await Promise.all(history.map(s => fetch("/api/history/" + s.id, { method: "DELETE", headers: { Authorization: "Bearer " + token } })));
-      setHistory([]); setViewingSession(null);
-    } catch (e) {}
+    await Promise.all(history.map((s) => fetch("/api/history/" + s.id, { method: "DELETE", headers: { Authorization: "Bearer " + token } })));
+    setHistory([]); setViewingSession(null);
   };
 
   const submitSetup = () => {
@@ -430,17 +446,8 @@ export default function App() {
   };
 
   const setupAudio = async (mediaStream) => {
-    try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
-      const src = ac.createMediaStreamSource(mediaStream);
-      const hp = ac.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 80;
-      const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 9000;
-      const gn = ac.createGain(); gn.gain.value = 15;
-      const comp = ac.createDynamicsCompressor(); comp.threshold.value = -50; comp.knee.value = 40; comp.ratio.value = 12; comp.attack.value = 0; comp.release.value = 0.25;
-      const an = ac.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0.3;
-      src.connect(hp); hp.connect(lp); lp.connect(gn); gn.connect(comp); comp.connect(an);
-      audioAnalyserRef.current = an;
-    } catch (e) { console.warn("Audio setup:", e); }
+    // PAS de createMediaStreamSource — ne pas connecter le micro à l'AudioContext
+    // La Web Speech API doit avoir accès exclusif au micro
     const mp = await loadMediaPipe();
     if (mp) { setMediapipeReady(true); startVisualAnalysis(mp); } else setMediapipeReady(false);
   };
@@ -511,22 +518,100 @@ export default function App() {
   const initSpeechRecognition = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return;
-    const rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 3; rec.lang = "fr-FR";
+    let finalAccumulator = "";
+    let active = true; // contrôle les redémarrages
+    const rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 3; rec.lang = "fr-FR";
     rec.onresult = (event) => {
-      let interim = ""; const final = [];
-      for (let i = 0; i < event.results.length; i++) {
-        const r = event.results[i];
-        if (r.isFinal) { let b = r[0].transcript, bc = r[0].confidence || 0; for (let j = 1; j < r.length; j++) if ((r[j].confidence || 0) > bc) { bc = r[j].confidence; b = r[j].transcript; } final.push(b.trim()); }
-        else if (i >= event.resultIndex) interim += r[0].transcript + " ";
-      }
       if (!transcriptStateRef.current.recording) return;
-      const full = final.join(" ") + (interim.trim() ? " " + interim.trim() : "");
-      transcriptRef.current = full; setLiveWordCount(full.split(/\s+/).filter(Boolean).length);
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r.isFinal) {
+          let b = r[0].transcript, bc = r[0].confidence || 0;
+          for (let j = 1; j < r.length; j++) if ((r[j].confidence || 0) > bc) { bc = r[j].confidence; b = r[j].transcript; }
+          finalAccumulator += b.trim() + " ";
+        } else {
+          interim += r[0].transcript;
+        }
+      }
+      const full = (finalAccumulator + interim).trim();
+      transcriptRef.current = full;
+      setLiveWordCount(full.split(/\s+/).filter(Boolean).length);
+      setSoundDetected(true);
     };
-    rec.onerror = (e) => { const d = e.error === "network" ? 2000 : e.error === "no-speech" ? 500 : 300; if (e.error !== "audio-capture" && e.error !== "not-allowed") setTimeout(() => { try { rec.start(); } catch (_) {} }, d); };
-    rec.onend = () => { setTimeout(() => { try { rec.start(); } catch (_) {} }, 100); };
+    rec.onerror = (e) => {
+      if (!active) return;
+      const d = e.error === "network" ? 2000 : e.error === "no-speech" ? 500 : 300;
+      if (e.error !== "audio-capture" && e.error !== "not-allowed") setTimeout(() => { if (active) try { rec.start(); } catch (_) {} }, d);
+    };
+    rec.onend = () => { if (active) setTimeout(() => { if (active) try { rec.start(); } catch (_) {} }, 100); };
     try { rec.start(); } catch (e) {}
     recognitionRef.current = rec;
+    recognitionRef.current._resetAccumulator = () => { finalAccumulator = ""; };
+    recognitionRef.current._stopForever = () => { active = false; try { rec.stop(); } catch (_) {} };
+  };
+
+  const startMicTest = () => {
+    setMicTestPhase(true);
+    setMicTestWord(false);
+    // Utilise la reconnaissance principale déjà active
+    // Active le flag recording pour que onresult écrive dans transcriptRef
+    transcriptStateRef.current.recording = true;
+    recognitionRef.current?._resetAccumulator?.();
+    transcriptRef.current = "";
+
+    let detected = false;
+    const check = setInterval(() => {
+      if (transcriptRef.current.trim().length > 0) {
+        detected = true;
+        clearInterval(check);
+        if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
+        transcriptStateRef.current.recording = false;
+        recognitionRef.current?._resetAccumulator?.();
+        transcriptRef.current = "";
+        setMicTestWord(true);
+      }
+    }, 200);
+
+    const bypass = setTimeout(() => {
+      if (!detected) {
+        clearInterval(check);
+        transcriptStateRef.current.recording = false;
+        recognitionRef.current?._resetAccumulator?.();
+        transcriptRef.current = "";
+        setMicTestWord("bypass");
+      }
+    }, 6000);
+
+    micTestRecRef.current = { _check: check, _bypass: bypass };
+  };
+
+  const confirmStartRecording = () => {
+    if (micTestRecRef.current?._check) clearInterval(micTestRecRef.current._check);
+    if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
+    micTestRecRef.current = null;
+    // recording = false ici, sera remis à true dans doStartRecording
+    transcriptStateRef.current.recording = false;
+    recognitionRef.current?._resetAccumulator?.();
+    transcriptRef.current = "";
+    setMicTestPhase(false);
+    setMicTestWord(false);
+    setCountdown(3);
+    setTimeout(() => setCountdown(2), 1000);
+    setTimeout(() => setCountdown(1), 2000);
+    setTimeout(() => { setCountdown(0); doStartRecording(); }, 3000);
+  };
+
+  const cancelMicTest = () => {
+    if (micTestRecRef.current?._check) clearInterval(micTestRecRef.current._check);
+    if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
+    micTestRecRef.current = null;
+    transcriptStateRef.current.recording = false;
+    recognitionRef.current?._resetAccumulator?.();
+    transcriptRef.current = "";
+    setMicTestPhase(false);
+    setMicTestWord(false);
   };
 
   const startRecording = () => {
@@ -535,29 +620,36 @@ export default function App() {
   };
 
   const doStartRecording = () => {
+    stoppingRef.current = false;
+    recordingTimeRef.current = 0;
     chunksRef.current = []; capturedFramesRef.current = []; audioLevelHistoryRef.current = [];
     transcriptRef.current = ""; transcriptStateRef.current.recording = true;
     setSoundDetected(false); setLiveWordCount(0);
-    try { recognitionRef.current?.start(); } catch (e) {}
-    const rec = new MediaRecorder(new MediaStream(stream.getAudioTracks()));
-    rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    rec.start(); mediaRecorderRef.current = rec; setRecordingTime(0); setPhase("recording");
+    if (recognitionRef.current?._resetAccumulator) recognitionRef.current._resetAccumulator();
+    setRecordingTime(0); setPhase("recording");
     const canvas = document.createElement("canvas"); canvas.width = 512; canvas.height = 288;
     const ctx = canvas.getContext("2d");
     frameIntervalRef.current = setInterval(() => { if (videoRef.current?.videoWidth > 0) try { ctx.drawImage(videoRef.current, 0, 0, 512, 288); capturedFramesRef.current.push(canvas.toDataURL("image/jpeg", 0.6).split(",")[1]); } catch (e) {} }, 1000);
-    if (audioAnalyserRef.current) {
-      const da = new Uint8Array(audioAnalyserRef.current.frequencyBinCount);
-      audioMonitorIntervalRef.current = setInterval(() => { audioAnalyserRef.current.getByteFrequencyData(da); const avg = da.reduce((a, b) => a + b, 0) / da.length; audioLevelHistoryRef.current.push(avg); if (avg > 0.8) setSoundDetected(true); }, 200);
-    }
-    const maxSec = Math.round(parseFloat(dureeMin) * 60) + 5;
-    timerRef.current = setInterval(() => setRecordingTime((t) => { if (t + 1 >= maxSec) setTimeout(() => stopRecording(), 100); return t + 1; }), 1000);
+    const maxSec = Math.round(parseFloat(dureeMin) * 60);
+    timerRef.current = setInterval(() => setRecordingTime((t) => {
+      const next = t + 1;
+      recordingTimeRef.current = next;
+      if (next >= maxSec) { stoppingRef.current = false; setTimeout(() => stopRecording(true), 100); }
+      return next;
+    }), 1000);
   };
 
-  const stopRecording = async () => {
-    if (recordingTime < MIN_RECORDING_SEC) { alert("Encore " + (MIN_RECORDING_SEC - recordingTime) + "s minimum (1 minute requise)."); return; }
+  const stopRecording = async (force = false) => {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    const currentTime = recordingTimeRef.current;
+    // Minimum requis = 30s, ou la moitié de la durée choisie si < 30s
+    const minSec = Math.min(30, Math.round(parseFloat(dureeMin || "1") * 60 * 0.5));
+    if (!force && currentTime < minSec) { alert("Encore " + (minSec - currentTime) + "s minimum."); stoppingRef.current = false; return; }
     transcriptStateRef.current.recording = false;
-    if (mediaRecorderRef.current?.state !== "inactive") mediaRecorderRef.current.stop();
-    setTimeout(() => { try { recognitionRef.current?.stop(); } catch (e) {} }, 400);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") mediaRecorderRef.current.stop();
+    // _stopForever désactive les redémarrages automatiques de onend
+    setTimeout(() => { try { recognitionRef.current?._stopForever?.() ?? recognitionRef.current?.stop(); } catch (e) {} }, 400);
     [timerRef, frameIntervalRef, audioMonitorIntervalRef].forEach((r) => { if (r.current) clearInterval(r.current); });
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     setPhase("analyzing");
@@ -569,9 +661,10 @@ export default function App() {
   const analyzeRecording = async () => {
     try {
       const allF = capturedFramesRef.current;
-      if (!allF.length) { setError("Aucune image capturée."); setPhase("welcome"); return; }
       const NB = 4;
-      const sel = allF.length <= NB ? allF : Array.from({ length: NB }, (_, i) => allF[Math.floor(i * allF.length / NB)]);
+      const sel = allF.length >= NB
+        ? Array.from({ length: NB }, (_, i) => allF[Math.floor(i * allF.length / NB)])
+        : allF; // peut être vide — l'analyse continue quand même sans images
       const transcript = transcriptRef.current.trim() || "[Transcription vide]";
       const typeLabel = TYPES_DISCOURS.find((t) => t.id === typeDiscours)?.label || "Non précisé";
       const lv = audioLevelHistoryRef.current;
@@ -585,11 +678,15 @@ export default function App() {
       const av = (a) => a.length ? Math.round(a.reduce((s, v) => s + v, 0) / a.length) : 0;
       const visualStats = vh.regard.length ? { regard: av(vh.regard), posture: av(vh.posture), gestuelle: av(vh.gestuelle), sourire: av(vh.sourire) } : {};
 
+      const prenom = user?.prenom || user?.email?.split("@")[0] || "";
+      const lastScoreMatch = history[0]?.analyse?.match(/score\s+(?:global|final)\s*:\s*(\d{1,3})\s*\/\s*100/i);
+      const last_score = lastScoreMatch ? parseInt(lastScoreMatch[1]) : null;
+
       const token = localStorage.getItem("nicolas-ia-token");
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-        body: JSON.stringify({ type_discours: typeDiscours, type_discours_label: typeLabel, duree_min: dureeMin, transcript, images: sel, audio_stats: audioStats, visual_stats: visualStats }),
+        body: JSON.stringify({ type_discours: typeDiscours, type_discours_label: typeLabel, duree_min: dureeMin, transcript, images: sel, audio_stats: audioStats, visual_stats: visualStats, prenom, last_score }),
       });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "HTTP " + res.status); }
       const data = await res.json();
@@ -607,6 +704,42 @@ export default function App() {
     setStream(null); setAnalysis(""); setRecordingTime(0); setError(""); setTypeDiscours(null); setDureeMin(""); setPhase("welcome");
   };
 
+  const abandonRecording = () => {
+    if (!window.confirm("Mettre fin à l'enregistrement sans analyser ?")) return;
+    stoppingRef.current = true;
+    transcriptStateRef.current.recording = false;
+    try { recognitionRef.current?.stop(); } catch (e) {}
+    [timerRef, frameIntervalRef, audioMonitorIntervalRef].forEach((r) => { if (r.current) clearInterval(r.current); });
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    stream?.getTracks().forEach((t) => t.stop());
+    setStream(null); setRecordingTime(0); setError(""); setTypeDiscours(null); setDureeMin(""); setPhase("welcome");
+  };
+
+  const extractScore = (text) => {
+    if (!text) return null;
+    const m = text.match(/score\s+(?:global|final)\s*:\s*(\d{1,3})\s*\/\s*100/i) || text.match(/\*\*score\s+(?:global|final)\s*:\s*(\d{1,3})\s*\/\s*100\*\*/i) || text.match(/score\s+(?:global|final)\s*:\s*(\d{1,3})\s*%/i) || text.match(/(\d{1,3})\s*\/\s*100/) || text.match(/(\d{1,3})\s*%/);
+    if (m) { const n = parseInt(m[1]); if (n >= 0 && n <= 100) return n; }
+    return null;
+  };
+  const extractCitation = (text) => {
+    if (!text) return null;
+    const re = /[«"]([^«»"]{20,300})[»"]/g; const c = []; let m;
+    while ((m = re.exec(text)) !== null) c.push(m[1].trim());
+    return c.length ? c[c.length - 1] : null;
+  };
+  const extractSynthese = (text) => {
+    if (!text) return null;
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (/score\s+(?:global|final)\s*:\s*\d{1,3}\s*(\/\s*100|%)/i.test(lines[i])) {
+        for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+          const c = lines[j].trim().replace(/^\*+|\*+$/g, "").trim();
+          if (c && !c.startsWith("---") && !c.startsWith("#")) return c;
+        }
+      }
+    }
+    return null;
+  };
 
   const renderMarkdown = (text) => {
     if (!text) return null;
@@ -646,6 +779,7 @@ export default function App() {
     const dateObj = sessionData ? new Date(sessionData.date) : new Date();
     const date = dateObj.toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
     const heure = dateObj.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const prenom = user?.prenom || user?.email?.split("@")[0] || "";
     const inl = (s) => s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\*(.+?)\*/g, "<em>$1</em>");
     const lines = analyseText.split("\n"); let html = "", tR = [], inT = false;
     const flushT = () => { if (!tR.length) return; html += "<table><thead><tr>" + tR[0].map((c) => "<th>" + inl(c) + "</th>").join("") + "</tr></thead><tbody>" + tR.slice(2).map((r) => "<tr>" + r.map((c) => "<td>" + inl(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table>"; tR = []; };
@@ -660,11 +794,11 @@ export default function App() {
       else html += "<p>" + inl(line) + "</p>";
     });
     if (inT) flushT();
-    const css = "@page{size:A4;margin:18mm}*{box-sizing:border-box}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;line-height:1.6;margin:0;padding:24px 32px}.header{border-bottom:3px solid " + COLOR_GOLD + ";padding-bottom:18px;margin-bottom:28px}.header .brand{font-size:28px;font-weight:700}.header .gold{color:" + COLOR_GOLD + "}.header .meta{color:#666;font-size:13px;margin-top:6px}h1{font-size:22px;border-bottom:2px solid " + COLOR_GOLD + ";padding-bottom:8px;margin-top:32px}h2{font-size:17px;margin-top:22px}h3{font-size:15px;margin-top:18px}p{margin:8px 0}.bullet{margin:5px 0 5px 14px}strong{font-weight:600}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12px}th{background:#000;color:" + COLOR_GOLD + ";padding:10px;text-align:left}td{padding:10px;border-bottom:1px solid #e8e2d4;vertical-align:top}.footer{margin-top:40px;padding-top:16px;border-top:1px solid #e8e2d4;font-size:11px;color:#888;text-align:center}";
-    const fullHtml = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/><title>Analyse Nicolas IA</title><style>' + css + '</style></head><body><div class="header"><div class="brand">Nicolas <span class="gold">IA</span></div><div class="meta">' + typeLabel + ' &middot; ' + dureeLabel + ' min &middot; ' + date + ' à ' + heure + '</div></div>' + html + '<div class="footer">Analyse générée par Nicolas IA — Organisme Silence</div></body></html>';
+    const css = "@page{size:A4;margin:18mm}*{box-sizing:border-box}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;line-height:1.6;margin:0;padding:24px 32px}.header{border-bottom:3px solid " + COLOR_GOLD + ";padding-bottom:18px;margin-bottom:28px}.header .brand{font-size:28px;font-weight:700}.header .gold{color:" + COLOR_GOLD + "}.header .meta{color:#666;font-size:13px;margin-top:6px}.header .prenom{font-size:16px;font-weight:600;color:#1a1a1a;margin-top:6px}h1{font-size:22px;border-bottom:2px solid " + COLOR_GOLD + ";padding-bottom:8px;margin-top:32px}h2{font-size:17px;margin-top:22px}h3{font-size:15px;margin-top:18px}p{margin:8px 0}.bullet{margin:5px 0 5px 14px}strong{font-weight:600}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12px}th{background:#000;color:" + COLOR_GOLD + ";padding:10px;text-align:left}td{padding:10px;border-bottom:1px solid #e8e2d4;vertical-align:top}.footer{margin-top:40px;padding-top:16px;border-top:1px solid #e8e2d4;font-size:11px;color:#888;text-align:center}";
+    const fullHtml = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/><title>Analyse Nicolas IA</title><style>' + css + '</style></head><body><div class="header"><div class="brand">Nicolas <span class="gold">IA</span></div>' + (prenom ? '<div class="prenom">Bonjour ' + prenom + '</div>' : '') + '<div class="meta">' + typeLabel + ' &middot; ' + dureeLabel + ' min &middot; ' + date + ' à ' + heure + '</div></div>' + html + '<div class="footer">Analyse générée par Nicolas IA — Organisme Silence</div></body></html>';
     const blob = new Blob([fullHtml], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "NicolasIA_" + typeLabel.replace(/\s+/g, "_") + "_" + date.replace(/\s+/g, "_") + ".html";
+    const a = document.createElement("a"); a.href = url; a.download = "NicolasIA_" + (prenom ? prenom + "_" : "") + typeLabel.replace(/\s+/g, "_") + "_" + date.replace(/\s+/g, "_") + ".html";
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
@@ -674,6 +808,7 @@ export default function App() {
     [timerRef, frameIntervalRef, audioMonitorIntervalRef].forEach((r) => { if (r.current) clearInterval(r.current); });
   }, []);
 
+  const fmtTime = (s) => { const m = Math.floor(s / 60), sec = s % 60; return m + ":" + (sec < 10 ? "0" + sec : sec); };
   const curType = TYPES_DISCOURS.find((t) => t.id === typeDiscours)?.label;
 
   // ============================================================
@@ -686,9 +821,10 @@ export default function App() {
         {/* ===== HEADER ===== */}
         {phase !== "login" && (
           <header style={M(styles.header, { marginBottom: 12, gap: 8 })}>
-            <h1 style={M(styles.logoTitle, { fontSize: 18 })} onClick={() => { if (phase !== "recording" && phase !== "analyzing") { setViewingSession(null); setPhase("welcome"); } }}>
-              Nicolas <span style={{ color: COLOR_GOLD }}>IA</span>
-            </h1>
+            <div style={{ cursor: "pointer" }} onClick={() => { if (phase !== "recording" && phase !== "analyzing") { setViewingSession(null); setPhase("welcome"); } }}>
+              <h1 style={M({ ...styles.logoTitle, marginBottom: 1 }, { fontSize: 18 })}>Nicolas <span style={{ color: COLOR_GOLD }}>IA</span></h1>
+              <div style={{ fontSize: isMobile ? 9 : 10, color: COLOR_GOLD, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 600, opacity: 0.8 }}>par Silence</div>
+            </div>
             <div style={{ display: "flex", gap: isMobile ? 6 : 10, flexWrap: "wrap", alignItems: "center" }}>
               {user && !isMobile && <span style={{ fontSize: 12, color: COLOR_TEXT_MUTED }}>{user.email}</span>}
               {phase !== "recording" && phase !== "analyzing" && phase !== "history" && phase !== "welcome" && (
@@ -719,26 +855,18 @@ export default function App() {
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? "6px 0" : 0 }}>
             <div style={M({ ...styles.card, width: "100%" }, { padding: "20px 16px" })} className="fade-in-up">
               <div style={{ textAlign: "center", marginBottom: isMobile ? 16 : 24 }}>
-                <div style={{ width: isMobile ? 60 : 80, height: isMobile ? 60 : 80, borderRadius: "50%", margin: "0 auto " + (isMobile ? "12px" : "20px"), background: "linear-gradient(135deg,#c9a961,#a8893f)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? 24 : 32, fontWeight: 700, color: COLOR_DARK }}>N</div>
-                <h1 style={{ fontSize: isMobile ? 24 : 32, fontWeight: 700, margin: "0 0 5px" }}>Nicolas <span style={{ color: COLOR_GOLD }}>IA</span></h1>
-                <p style={{ fontSize: isMobile ? 13 : 14, color: COLOR_TEXT_MUTED, margin: 0 }}>{loginMode === "login" ? "Connectez-vous à votre espace" : "Créez votre compte"}</p>
+                <h1 style={{ fontSize: isMobile ? 24 : 32, fontWeight: 700, margin: "0 0 4px" }}>Nicolas <span style={{ color: COLOR_GOLD }}>IA</span></h1>
+                <div style={{ fontSize: isMobile ? 10 : 11, color: COLOR_GOLD, letterSpacing: "0.2em", textTransform: "uppercase", fontWeight: 600, opacity: 0.85, marginBottom: isMobile ? 10 : 14 }}>par Silence</div>
+                <p style={{ fontSize: isMobile ? 13 : 14, color: COLOR_TEXT_MUTED, margin: 0 }}>Connectez-vous à votre espace</p>
               </div>
               <label style={styles.label}>Email</label>
-              {/* fontSize 16px : évite le zoom automatique sur iOS */}
               <input type="email" placeholder="vous@exemple.com" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} style={{ ...styles.input, fontSize: isMobile ? 16 : 14 }} />
               <label style={styles.label}>Mot de passe</label>
               <input type="password" placeholder="Minimum 4 caractères" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} style={{ ...styles.input, fontSize: isMobile ? 16 : 14 }} />
               {error && <div style={styles.error}><AlertCircle size={14} /> {error}</div>}
               <button style={{ ...styles.btn, ...styles.btnPrimary, width: "100%", justifyContent: "center", marginTop: 8, fontSize: isMobile ? 15 : 14 }} onClick={handleLogin}>
-                {loginMode === "login" ? "Se connecter" : "Créer mon compte"} <ArrowRight size={14} />
+                Se connecter <ArrowRight size={14} />
               </button>
-              <div style={{ textAlign: "center", marginTop: 16, fontSize: 13, color: COLOR_TEXT_MUTED }}>
-                {loginMode === "login" ? "Pas encore de compte ?" : "Déjà inscrit ?"}{" "}
-                <button style={{ background: "transparent", border: "none", color: COLOR_GOLD, cursor: "pointer", fontSize: 13, fontWeight: 600, padding: 0, textDecoration: "underline" }} onClick={() => { setLoginMode(loginMode === "login" ? "signup" : "login"); setError(""); }}>
-                  {loginMode === "login" ? "Créer un compte" : "Se connecter"}
-                </button>
-              </div>
-              <p style={{ fontSize: 11, color: COLOR_TEXT_MUTED, textAlign: "center", marginTop: 18, opacity: 0.7 }}>Vos données restent dans votre navigateur.</p>
             </div>
           </div>
         )}
@@ -749,7 +877,7 @@ export default function App() {
             <MicBanner isMobile={isMobile} />
             <h1 style={{ fontSize: isMobile ? 36 : 56, fontWeight: 700, margin: "0 0 8px", letterSpacing: isMobile ? "-0.02em" : "-0.03em" }}>Bienvenue<span style={{ color: COLOR_GOLD }}>.</span></h1>
             <p style={{ fontSize: isMobile ? 15 : 18, color: COLOR_TEXT_MUTED, margin: "0 auto 6px", maxWidth: 560 }}>
-              Bonjour <strong style={{ color: COLOR_GOLD }}>{user?.email?.split("@")[0]}</strong>
+              Bonjour <strong style={{ color: COLOR_GOLD }}>{user?.prenom || user?.email?.split("@")[0]}</strong>
             </p>
             <p style={{ fontSize: isMobile ? 13 : 15, color: COLOR_TEXT_MUTED, margin: "0 auto " + (isMobile ? "24px" : "40px"), maxWidth: 520, lineHeight: 1.6, padding: isMobile ? "0 2px" : 0 }}>
               Prêt à perfectionner votre prise de parole ? Enregistrez votre discours et recevez une analyse complète en quelques secondes.
@@ -774,7 +902,7 @@ export default function App() {
               <div style={{ background: COLOR_GOLD + "11", border: "1px solid " + COLOR_GOLD + "44", borderRadius: 10, padding: isMobile ? "9px 12px" : "12px 16px", marginBottom: isMobile ? 12 : 20, display: "flex", alignItems: "center", gap: 10 }}>
                 <HeadphonesIcon size={17} color={COLOR_GOLD} />
                 <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.5 }}>
-                  <strong style={{ color: COLOR_GOLD }}>Rappel :</strong> portez vos écouteurs avec micro avant de lancer.
+                  <strong style={{ color: COLOR_GOLD }}>Rappel :</strong> portez vos écouteurs avec micro avant de lancer. Le micro intégré peut mal capter la voix à distance.
                 </div>
               </div>
               <div style={{ textAlign: "center", marginBottom: 8 }}>
@@ -793,8 +921,8 @@ export default function App() {
                 ))}
               </div>
               <label style={styles.label}><Clock size={12} /> Durée prévue</label>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: isMobile ? 6 : 8, marginBottom: 12 }}>
-                {[{ val: "1", label: "1 min" }, { val: "2", label: "2 min" }, { val: "5", label: "5 min" }, { val: "10", label: "10 min" }].map((d) => (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: isMobile ? 6 : 8, marginBottom: 12 }}>
+                {[{ val: "1", label: "1 min" }, { val: "2", label: "2 min" }, { val: "3", label: "3 min" }, { val: "5", label: "5 min" }, { val: "10", label: "10 min" }].map((d) => (
                   <button key={d.val} onClick={() => setDureeMin(d.val)}
                     style={{ ...styles.selectOption, ...(dureeMin === d.val ? styles.selectOptionActive : {}), textAlign: "center", ...(isMobile ? { padding: "10px 4px", fontSize: 12 } : {}) }}>
                     {d.label}
@@ -835,8 +963,11 @@ export default function App() {
                 {curType} · {dureeMin} min
               </div>
               {countdown > 0 && (
-                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.75)" }}>
+                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.75)" }}>
                   <div style={{ fontSize: isMobile ? 80 : 120, fontWeight: 700, color: COLOR_GOLD }}>{countdown}</div>
+                  <div style={{ fontSize: isMobile ? 22 : 32, color: COLOR_TEXT, marginTop: isMobile ? 16 : 24, fontWeight: 700, letterSpacing: "0.02em", textAlign: "center", padding: "0 20px", animation: "pulse 1s ease-in-out infinite", textTransform: "uppercase" }}>
+                    Regardez la caméra quand vous parlez
+                  </div>
                 </div>
               )}
             </div>
@@ -876,38 +1007,111 @@ export default function App() {
                 </div>
               )}
 
-              {recordingTime < MIN_RECORDING_SEC && (
-                <div style={{ marginTop: isMobile ? 8 : 16, padding: isMobile ? "8px 10px" : 12, background: COLOR_GOLD + "11", border: "1px solid " + COLOR_GOLD + "44", borderRadius: 10 }}>
-                  <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_GOLD, marginBottom: 5, fontWeight: 600, display: "flex", justifyContent: "space-between" }}>
-                    <span>⏱️ {fmtTime(recordingTime)} / 1:00</span>
-                    <span>{Math.round((recordingTime / MIN_RECORDING_SEC) * 100)}%</span>
+              {(() => {
+                const minSec = Math.min(30, Math.round(parseFloat(dureeMin || "1") * 60 * 0.5));
+                return recordingTime < minSec && (
+                  <div style={{ marginTop: isMobile ? 8 : 16, padding: isMobile ? "8px 10px" : 12, background: COLOR_GOLD + "11", border: "1px solid " + COLOR_GOLD + "44", borderRadius: 10 }}>
+                    <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_GOLD, marginBottom: 5, fontWeight: 600, display: "flex", justifyContent: "space-between" }}>
+                      <span>⏱️ {fmtTime(recordingTime)} / {fmtTime(minSec)}</span>
+                      <span>{Math.round((recordingTime / minSec) * 100)}%</span>
+                    </div>
+                    <div style={{ height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: Math.min(100, (recordingTime / minSec) * 100) + "%", background: "linear-gradient(90deg," + COLOR_GOLD + "," + COLOR_GOLD_LIGHT + ")", transition: "width 1s linear" }} />
+                    </div>
                   </div>
-                  <div style={{ height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: Math.min(100, (recordingTime / MIN_RECORDING_SEC) * 100) + "%", background: "linear-gradient(90deg," + COLOR_GOLD + "," + COLOR_GOLD_LIGHT + ")", transition: "width 1s linear" }} />
+                );
+              })()}
+
+              {recordingTime >= 30 && liveWordCount === 0 && (
+                <div style={{ marginTop: isMobile ? 8 : 12, padding: isMobile ? "10px 12px" : "12px 16px", background: "#dc262611", border: "1px solid #dc262666", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <AlertCircle size={16} color="#fca5a5" />
+                  <div>
+                    <div style={{ fontSize: isMobile ? 11 : 12, fontWeight: 700, color: "#fca5a5", marginBottom: 3 }}>⚠️ Aucun mot capté pour l'instant</div>
+                    <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.5 }}>Vérifiez que le micro est autorisé et parlez suffisamment près. Des <strong style={{ color: COLOR_GOLD_LIGHT }}>écouteurs avec micro</strong> améliorent fortement la capture.</div>
                   </div>
                 </div>
               )}
             </>)}
 
             <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: isMobile ? 12 : 24 }}>
-              {phase === "ready" && countdown === 0 && (
-                <button style={{ ...styles.btn, ...styles.btnDanger, width: isMobile ? "100%" : undefined, justifyContent: "center", fontSize: isMobile ? 15 : 14 }} onClick={startRecording}>
+              {phase === "ready" && countdown === 0 && !micTestPhase && (
+                <button style={{ ...styles.btn, ...styles.btnDanger, flex: isMobile ? 1 : undefined, justifyContent: "center", fontSize: isMobile ? 15 : 14 }} onClick={startMicTest}>
                   <span style={{ width: 11, height: 11, borderRadius: "50%", background: "white", flexShrink: 0 }} /> Lancer l'enregistrement
                 </button>
               )}
+              {phase === "ready" && micTestPhase && (
+                <div style={{ width: "100%", background: "#0f0f0fcc", border: "1px solid " + COLOR_GOLD + "44", borderRadius: 12, padding: isMobile ? "14px 14px" : "20px 24px" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: COLOR_GOLD, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 10 }}>🎙️ Test micro</div>
+                  {!micTestWord && (<>
+                    <p style={{ fontSize: isMobile ? 13 : 14, color: COLOR_TEXT, margin: "0 0 14px", lineHeight: 1.6 }}>
+                      Dites quelques mots à voix haute…
+                    </p>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#dc2626", animation: "pulse 1s ease-in-out infinite", flexShrink: 0 }} />
+                      <span style={{ fontSize: isMobile ? 12 : 13, color: COLOR_TEXT_MUTED }}>En écoute…</span>
+                    </div>
+                  </>)}
+                  {micTestWord === true && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 14px", background: "#22c55e1a", border: "1px solid #22c55e66", borderRadius: 8 }}>
+                      <CheckCircle size={18} color="#86efac" />
+                      <span style={{ fontSize: isMobile ? 13 : 14, color: "#86efac", fontWeight: 600 }}>Micro opérationnel ✓</span>
+                    </div>
+                  )}
+                  {micTestWord === "bypass" && (
+                    <div style={{ marginBottom: 14, padding: "10px 14px", background: "#f59e0b11", border: "1px solid #f59e0b44", borderRadius: 8 }}>
+                      <div style={{ fontSize: isMobile ? 12 : 13, color: "#fcd34d", fontWeight: 600, marginBottom: 4 }}>⚠️ Aucun mot détecté</div>
+                      <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.5 }}>
+                        Vérifiez vos écouteurs et les permissions micro. Vous pouvez quand même lancer l'analyse.
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {(micTestWord === true || micTestWord === "bypass") && (
+                      <button style={{ ...styles.btn, ...(micTestWord === true ? styles.btnPrimary : { background: "#f59e0b", color: "#000", padding: "14px 28px", fontWeight: 600 }), flex: 1, justifyContent: "center", fontSize: isMobile ? 14 : 14 }} onClick={confirmStartRecording}>
+                        {micTestWord === true ? "Démarrer" : "Lancer quand même"} <ArrowRight size={14} />
+                      </button>
+                    )}
+                    <button style={{ ...styles.btn, ...styles.btnSecondary, justifyContent: "center", fontSize: isMobile ? 13 : 13 }} onClick={cancelMicTest}>
+                      Annuler
+                    </button>
+                  </div>
+                </div>
+              )}
               {phase === "recording" && (
-                <button style={{ ...styles.btn, ...(recordingTime < MIN_RECORDING_SEC ? { background: "#555", color: "#999", cursor: "not-allowed", padding: "14px 28px", fontWeight: 600 } : styles.btnPrimary), width: isMobile ? "100%" : undefined, justifyContent: "center", fontSize: isMobile ? 13 : 14 }} onClick={stopRecording} disabled={recordingTime < MIN_RECORDING_SEC}>
-                  <Square size={14} />{recordingTime < MIN_RECORDING_SEC ? "Encore " + (MIN_RECORDING_SEC - recordingTime) + "s" : "Arrêter et analyser"}
+                (() => {
+                  const minSec = Math.min(30, Math.round(parseFloat(dureeMin || "1") * 60 * 0.5));
+                  const locked = recordingTime < minSec;
+                  return (
+                    <button style={{ ...styles.btn, ...(locked ? { background: "#555", color: "#999", cursor: "not-allowed", padding: "14px 28px", fontWeight: 600 } : styles.btnPrimary), flex: isMobile ? 1 : undefined, justifyContent: "center", fontSize: isMobile ? 13 : 14 }} onClick={() => stopRecording()} disabled={locked}>
+                      <Square size={14} />{locked ? "Encore " + (minSec - recordingTime) + "s" : "Arrêter et analyser"}
+                    </button>
+                  );
+                })()
+              )}
+              {(phase === "ready" || phase === "recording") && countdown === 0 && !micTestPhase && (
+                <button style={{ ...styles.btn, ...styles.btnSecondary, justifyContent: "center", fontSize: isMobile ? 13 : 14 }} onClick={abandonRecording}>
+                  ✕ Annuler
                 </button>
               )}
             </div>
 
             {phase === "ready" && countdown === 0 && (
-              <div style={{ background: "#c9a96111", border: "1px solid #c9a96133", borderRadius: 10, padding: isMobile ? "9px 12px" : 14, marginTop: isMobile ? 10 : 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: COLOR_GOLD, marginBottom: 4, textTransform: "uppercase" }}>💡 Conseils</div>
-                <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.6 }}>
-                  • Décompte 3s au clic. Parlez naturellement, regardez la caméra.<br />
-                  • <strong style={{ color: COLOR_GOLD }}>⏱️ Minimum 1 minute</strong> pour une analyse fiable.
+              <div style={{ marginTop: isMobile ? 10 : 16, display: "flex", flexDirection: "column", gap: isMobile ? 8 : 10 }}>
+                <div style={{ background: "linear-gradient(135deg,#1a0d00 0%,#0f0a00 100%)", border: "1.5px solid " + COLOR_GOLD, borderRadius: isMobile ? 10 : 12, padding: isMobile ? "12px 14px" : "14px 18px", display: "flex", alignItems: "flex-start", gap: 12, boxShadow: "0 0 20px " + COLOR_GOLD + "22" }}>
+                  <HeadphonesIcon size={18} color={COLOR_GOLD} />
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: COLOR_GOLD, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>🎧 Conseil audio — avant de lancer</div>
+                    <div style={{ fontSize: isMobile ? 12 : 13, color: COLOR_TEXT, lineHeight: 1.55 }}>
+                      Pour une transcription optimale, portez de préférence des <strong style={{ color: COLOR_GOLD_LIGHT }}>écouteurs avec micro intégré</strong> ou connectez un <strong style={{ color: COLOR_GOLD_LIGHT }}>micro USB</strong>. Le micro intégré peut mal capter la voix à distance.
+                    </div>
+                  </div>
+                </div>
+                <div style={{ background: "#c9a96111", border: "1px solid #c9a96133", borderRadius: 10, padding: isMobile ? "9px 12px" : 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: COLOR_GOLD, marginBottom: 4, textTransform: "uppercase" }}>💡 Conseils</div>
+                  <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.6 }}>
+                    • Décompte 3s au clic. Parlez naturellement, regardez la caméra.<br />
+                    • L'enregistrement s'arrête automatiquement à la fin de la durée choisie.
+                  </div>
                 </div>
               </div>
             )}
@@ -925,12 +1129,6 @@ export default function App() {
               return (<>
                 {score !== null && <GlobalScoreBanner score={score} syntheseLine={synthese} isMobile={isMobile} />}
                 <div style={M(styles.resultsBox, { padding: "18px 12px", borderRadius: 10 })}>{renderMarkdown(analysis)}</div>
-                {citation && (
-                  <div style={{ background: "linear-gradient(135deg,#000 0%,#0f0f0f 100%)", borderRadius: isMobile ? 10 : 14, padding: isMobile ? "18px 14px" : "36px 40px", marginTop: isMobile ? 12 : 20, border: "1px solid #c9a96166" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: COLOR_GOLD, textTransform: "uppercase", letterSpacing: "0.15em", marginBottom: isMobile ? 8 : 14 }}>Mot de la fin</div>
-                    <blockquote style={{ margin: 0, fontSize: isMobile ? 14 : 19, lineHeight: 1.6, fontStyle: "italic", color: COLOR_TEXT }}>« {citation} »</blockquote>
-                  </div>
-                )}
               </>);
             })()}
           </div>
@@ -944,8 +1142,6 @@ export default function App() {
     </div>
   );
 }
-
-export { MicBanner, AnalyzingScreen, GlobalScoreBanner };
 
 // ============================================================
 // COMPOSANT : HISTORIQUE
