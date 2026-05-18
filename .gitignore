@@ -1,0 +1,22 @@
+# Dépendances
+node_modules/
+
+# Build
+dist/
+.vite/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Config Vite locale (peut contenir des secrets)
+vite.config.local.js
+vite.config.local.ts
+
+# Fichiers Markdown (docs internes)
+*.md
+
+# OS
+.DS_Store
+Thumbs.db
