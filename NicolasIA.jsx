@@ -4,9 +4,11 @@
 // ============================================================
 
 import React, { useState, useRef, useEffect } from "react";
+import html2pdf from 'html2pdf.js';
 
 // Clé API gérée côté serveur uniquement
 const STORAGE_KEY = "nicolas-ia-history";
+const API_BASE = "https://api.coachingprisedeparole.fr";
 const USER_KEY = "nicolas-ia-user";
 const MIN_RECORDING_SEC = 60;
 
@@ -352,18 +354,24 @@ export default function App() {
   const recordingTimeRef = useRef(0);
   const micTestRecRef = useRef(null);
 
+  const isChromeBased = !!window.chrome && /Chrome/.test(navigator.userAgent);
   const [showChangePwd, setShowChangePwd] = useState(false);
   const [adminUsers, setAdminUsers] = useState([]);
+  const [showDeviceModal, setShowDeviceModal] = useState(false);
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [selectedAudioId, setSelectedAudioId] = useState("");
+  const [selectedVideoId, setSelectedVideoId] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("nicolas-ia-token");
     if (!token) return;
-    fetch("/auth/me", { headers: { Authorization: "Bearer " + token } })
+    fetch(API_BASE + "/auth/me", { headers: { Authorization: "Bearer " + token } })
       .then((r) => r.ok ? r.json() : null)
       .then((u) => {
         if (!u) { localStorage.removeItem("nicolas-ia-token"); return; }
         setUser(u); setPhase("welcome");
-        return fetch("/api/history", { headers: { Authorization: "Bearer " + token } });
+        return fetch(API_BASE + "/api/history", { headers: { Authorization: "Bearer " + token } });
       })
       .then((r) => r?.ok ? r.json() : null)
       .then((data) => { if (Array.isArray(data)) setHistory(data.map(transformSession)); })
@@ -374,7 +382,7 @@ export default function App() {
     setError("");
     if (!loginEmail || !loginPassword) { setError("Email et mot de passe requis."); return; }
     try {
-      const res = await fetch("/auth/login", {
+      const res = await fetch(API_BASE + "/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: loginEmail, password: loginPassword }),
@@ -382,10 +390,10 @@ export default function App() {
       if (!res.ok) { setError("Identifiants incorrects."); return; }
       const data = await res.json();
       localStorage.setItem("nicolas-ia-token", data.access_token);
-      const me = await fetch("/auth/me", { headers: { Authorization: "Bearer " + data.access_token } });
+      const me = await fetch(API_BASE + "/auth/me", { headers: { Authorization: "Bearer " + data.access_token } });
       const u = await me.json();
       setUser(u); setPhase("welcome");
-      const h = await fetch("/api/history", { headers: { Authorization: "Bearer " + data.access_token } });
+      const h = await fetch(API_BASE + "/api/history", { headers: { Authorization: "Bearer " + data.access_token } });
       if (h.ok) { const hdata = await h.json(); setHistory(hdata.map(transformSession)); }
     } catch (e) { setError("Erreur de connexion."); }
   };
@@ -398,12 +406,12 @@ export default function App() {
   const saveHistory = async (session) => {
     const token = localStorage.getItem("nicolas-ia-token");
     try {
-      await fetch("/api/history", {
+      await fetch(API_BASE + "/api/history", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
         body: JSON.stringify(session),
       });
-      const h = await fetch("/api/history", { headers: { Authorization: "Bearer " + token } });
+      const h = await fetch(API_BASE + "/api/history", { headers: { Authorization: "Bearer " + token } });
       const data = await h.json();
       setHistory(data.map(transformSession));
     } catch (e) {}
@@ -412,7 +420,7 @@ export default function App() {
   const deleteSession = async (id) => {
     const token = localStorage.getItem("nicolas-ia-token");
     try {
-      await fetch("/api/history/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+      await fetch(API_BASE + "/api/history/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
       setHistory((prev) => prev.filter((s) => s.id !== id));
       setViewingSession(null);
     } catch (e) {}
@@ -421,21 +429,21 @@ export default function App() {
   const clearAllHistory = async () => {
     if (!window.confirm("Supprimer TOUTES les analyses ?")) return;
     const token = localStorage.getItem("nicolas-ia-token");
-    await Promise.all(history.map((s) => fetch("/api/history/" + s.id, { method: "DELETE", headers: { Authorization: "Bearer " + token } })));
+    await Promise.all(history.map((s) => fetch(API_BASE + "/api/history/" + s.id, { method: "DELETE", headers: { Authorization: "Bearer " + token } })));
     setHistory([]); setViewingSession(null);
   };
 
   const loadAdminUsers = async () => {
     const token = localStorage.getItem("nicolas-ia-token");
     try {
-      const r = await fetch("/admin/users", { headers: { Authorization: "Bearer " + token } });
+      const r = await fetch(API_BASE + "/admin/users", { headers: { Authorization: "Bearer " + token } });
       if (r.ok) setAdminUsers(await r.json());
     } catch (e) {}
   };
 
   const handleAdminCreateUser = async ({ email, password, role }) => {
     const token = localStorage.getItem("nicolas-ia-token");
-    const r = await fetch("/admin/users", {
+    const r = await fetch(API_BASE + "/admin/users", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
       body: JSON.stringify({ email, password, role }),
@@ -446,7 +454,7 @@ export default function App() {
 
   const handleAdminPatchUser = async (id, patch) => {
     const token = localStorage.getItem("nicolas-ia-token");
-    const r = await fetch("/admin/users/" + id, {
+    const r = await fetch(API_BASE + "/admin/users/" + id, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
       body: JSON.stringify(patch),
@@ -457,21 +465,36 @@ export default function App() {
   const handleAdminDeleteUser = async (id) => {
     if (!window.confirm("Supprimer cet utilisateur ?")) return;
     const token = localStorage.getItem("nicolas-ia-token");
-    const r = await fetch("/admin/users/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
+    const r = await fetch(API_BASE + "/admin/users/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + token } });
     if (r.ok) await loadAdminUsers();
   };
 
   const submitSetup = () => {
     if (!typeDiscours) { setError("Choisissez un type de discours."); return; }
     if (!dureeMin || parseFloat(dureeMin) <= 0) { setError("Indiquez une durée valide."); return; }
-    setError(""); requestPermissions();
+    setError(""); openDeviceModal();
   };
 
-  const requestPermissions = async () => {
+  const openDeviceModal = async () => {
+    try {
+      const tmpStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      tmpStream.getTracks().forEach(t => t.stop());
+    } catch (_) {}
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audios = devices.filter(d => d.kind === "audioinput");
+    const videos = devices.filter(d => d.kind === "videoinput");
+    setAudioDevices(audios);
+    setVideoDevices(videos);
+    setSelectedAudioId(audios[0]?.deviceId || "");
+    setSelectedVideoId(videos[0]?.deviceId || "");
+    setShowDeviceModal(true);
+  };
+
+  const requestPermissions = async (audioId, videoId) => {
     setPermissionError(false);
     try {
       if (!navigator.mediaDevices?.getUserMedia) { setError("Navigateur non compatible. Utilisez Chrome ou Safari."); setPermissionError(true); setPhase("setup"); return; }
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000, channelCount: 1, sampleSize: 16 } });
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ video: videoId ? { deviceId: { exact: videoId } } : true, audio: { ...(audioId ? { deviceId: { exact: audioId } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000, channelCount: 1, sampleSize: 16 } });
       setStream(mediaStream); setPhase("ready");
       setTimeout(() => { if (videoRef.current) { videoRef.current.srcObject = mediaStream; videoRef.current.play().catch(() => {}); } setupAudio(mediaStream); initSpeechRecognition(); }, 100);
     } catch (err) {
@@ -661,6 +684,12 @@ export default function App() {
     stoppingRef.current = false;
     recordingTimeRef.current = 0;
     chunksRef.current = []; capturedFramesRef.current = []; audioLevelHistoryRef.current = [];
+    const audioStream = new MediaStream(stream.getAudioTracks());
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+    const mr = new MediaRecorder(audioStream, { mimeType });
+    mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    mr.start(1000);
+    mediaRecorderRef.current = mr;
     transcriptRef.current = ""; transcriptStateRef.current.recording = true;
     setSoundDetected(false); setLiveWordCount(0);
     if (recognitionRef.current?._resetAccumulator) recognitionRef.current._resetAccumulator();
@@ -685,7 +714,14 @@ export default function App() {
     const minSec = Math.min(30, Math.round(parseFloat(dureeMin || "1") * 60 * 0.5));
     if (!force && currentTime < minSec) { alert("Encore " + (minSec - currentTime) + "s minimum."); stoppingRef.current = false; return; }
     transcriptStateRef.current.recording = false;
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") mediaRecorderRef.current.stop();
+    const audioBlob = await new Promise((resolve) => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.onstop = () => resolve(new Blob(chunksRef.current, { type: mediaRecorderRef.current.mimeType }));
+        mediaRecorderRef.current.stop();
+      } else {
+        resolve(null);
+      }
+    });
     // _stopForever désactive les redémarrages automatiques de onend
     setTimeout(() => { try { recognitionRef.current?._stopForever?.() ?? recognitionRef.current?.stop(); } catch (e) {} }, 400);
     [timerRef, frameIntervalRef, audioMonitorIntervalRef].forEach((r) => { if (r.current) clearInterval(r.current); });
@@ -693,17 +729,31 @@ export default function App() {
     setPhase("analyzing");
     await new Promise((r) => setTimeout(r, 1500));
     stream?.getTracks().forEach((t) => t.stop());
-    await analyzeRecording();
+    await analyzeRecording(audioBlob);
   };
 
-  const analyzeRecording = async () => {
+  const analyzeRecording = async (audioBlob = null) => {
     try {
+      let whisperTranscript = "";
+      if (audioBlob) {
+        try {
+          const token = localStorage.getItem("nicolas-ia-token");
+          const formData = new FormData();
+          formData.append("audio", audioBlob, "recording.webm");
+          const r = await fetch(API_BASE + "/api/transcribe", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + token },
+            body: formData,
+          });
+          if (r.ok) whisperTranscript = (await r.json()).transcript || "";
+        } catch (_) {}
+      }
       const allF = capturedFramesRef.current;
       const NB = 4;
       const sel = allF.length >= NB
         ? Array.from({ length: NB }, (_, i) => allF[Math.floor(i * allF.length / NB)])
         : allF; // peut être vide — l'analyse continue quand même sans images
-      const transcript = transcriptRef.current.trim() || "[Transcription vide]";
+      const transcript = (whisperTranscript || transcriptRef.current).trim() || "[Transcription vide]";
       const typeLabel = TYPES_DISCOURS.find((t) => t.id === typeDiscours)?.label || "Non précisé";
       const lv = audioLevelHistoryRef.current;
       let audioStats = {};
@@ -721,7 +771,7 @@ export default function App() {
       const last_score = lastScoreMatch ? parseInt(lastScoreMatch[1]) : null;
 
       const token = localStorage.getItem("nicolas-ia-token");
-      const res = await fetch("/api/analyze", {
+      const res = await fetch(API_BASE + "/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
         body: JSON.stringify({ type_discours: typeDiscours, type_discours_label: typeLabel, duree_min: dureeMin, transcript, images: sel, audio_stats: audioStats, visual_stats: visualStats, prenom, last_score }),
@@ -834,11 +884,15 @@ export default function App() {
     if (inT) flushT();
     const css = "@page{size:A4;margin:18mm}*{box-sizing:border-box}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;line-height:1.6;margin:0;padding:24px 32px}.header{border-bottom:3px solid " + COLOR_GOLD + ";padding-bottom:18px;margin-bottom:28px}.header .brand{font-size:28px;font-weight:700}.header .gold{color:" + COLOR_GOLD + "}.header .meta{color:#666;font-size:13px;margin-top:6px}.header .prenom{font-size:16px;font-weight:600;color:#1a1a1a;margin-top:6px}h1{font-size:22px;border-bottom:2px solid " + COLOR_GOLD + ";padding-bottom:8px;margin-top:32px}h2{font-size:17px;margin-top:22px}h3{font-size:15px;margin-top:18px}p{margin:8px 0}.bullet{margin:5px 0 5px 14px}strong{font-weight:600}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12px}th{background:#000;color:" + COLOR_GOLD + ";padding:10px;text-align:left}td{padding:10px;border-bottom:1px solid #e8e2d4;vertical-align:top}.footer{margin-top:40px;padding-top:16px;border-top:1px solid #e8e2d4;font-size:11px;color:#888;text-align:center}";
     const fullHtml = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/><title>Analyse Nicolas IA</title><style>' + css + '</style></head><body><div class="header"><div class="brand">Nicolas <span class="gold">IA</span></div>' + (prenom ? '<div class="prenom">Bonjour ' + prenom + '</div>' : '') + '<div class="meta">' + typeLabel + ' &middot; ' + dureeLabel + ' min &middot; ' + date + ' à ' + heure + '</div></div>' + html + '<div class="footer">Analyse générée par Nicolas IA — Organisme Silence</div></body></html>';
-    const blob = new Blob([fullHtml], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "NicolasIA_" + (prenom ? prenom + "_" : "") + typeLabel.replace(/\s+/g, "_") + "_" + date.replace(/\s+/g, "_") + ".html";
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    const container = document.createElement('div');
+    container.innerHTML = fullHtml;
+    const filename = "NicolasIA_" + (prenom ? prenom + "_" : "") + typeLabel.replace(/\s+/g, "_") + "_" + date.replace(/\s+/g, "_") + ".pdf";
+    html2pdf().set({
+      margin: [15, 18, 15, 18],
+      filename: filename,
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    }).from(container).save();
   };
 
   useEffect(() => () => {
@@ -906,7 +960,7 @@ export default function App() {
         {/* ===== LOGIN ===== */}
         {phase === "login" && (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? "6px 0" : 0 }}>
-            <div style={M({ ...styles.card, width: "100%" }, { padding: "20px 16px" })} className="fade-in-up">
+            <div style={M({ ...styles.card, width: "100%" }, { padding: "20px 16px" })}>
               <div style={{ textAlign: "center", marginBottom: isMobile ? 16 : 24 }}>
                 <h1 style={{ fontSize: isMobile ? 24 : 32, fontWeight: 700, margin: "0 0 4px" }}>Nicolas <span style={{ color: COLOR_GOLD }}>IA</span></h1>
                 <div style={{ fontSize: isMobile ? 10 : 11, color: COLOR_GOLD, letterSpacing: "0.2em", textTransform: "uppercase", fontWeight: 600, opacity: 0.85, marginBottom: isMobile ? 10 : 14 }}>par Silence</div>
@@ -962,6 +1016,11 @@ export default function App() {
                 <h2 style={{ fontSize: isMobile ? 19 : 26, fontWeight: 700, margin: "0 0 5px" }}>Préparons votre session</h2>
                 <p style={{ fontSize: isMobile ? 12 : 14, color: COLOR_TEXT_MUTED, margin: 0 }}>Quelques détails pour personnaliser l'analyse</p>
               </div>
+              {!isChromeBased && (
+                <div style={{ background: "#7c3a00", color: "#fff", padding: "10px 16px", borderRadius: 8, marginBottom: 16, fontSize: 14, textAlign: "center" }}>
+                  ⚠️ La transcription fonctionne uniquement sur <strong>Google Chrome</strong>. Veuillez changer de navigateur avant de continuer.
+                </div>
+              )}
               <label style={styles.label}><MessageSquare size={12} /> Type de discours</label>
               {/* Mobile : 2 colonnes / Desktop : auto-fill — seul le gridTemplateColumns change */}
               <div style={{ ...styles.selectGrid, ...(isMobile ? { gridTemplateColumns: "1fr 1fr", gap: 8 } : {}) }}>
@@ -1042,7 +1101,7 @@ export default function App() {
                   <div style={{ fontSize: 11, fontWeight: 700, color: COLOR_GOLD, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: isMobile ? 8 : 12 }}>Analyse visuelle en direct</div>
                   {/* 2 colonnes mobile, 4 desktop */}
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fit,minmax(140px,1fr))", gap: isMobile ? 8 : 12 }}>
-                    {[{ label: "Regard", value: liveVisual.regard, icon: "👁️" }, { label: "Posture", value: liveVisual.posture, icon: "🧍" }, { label: "Gestuelle", value: liveVisual.gestuelle, icon: "👐" }, { label: "Sourire", value: liveVisual.sourire, icon: "😊" }].map((ind, i) => {
+                    {[{ label: "Regard", value: liveVisual.regard, icon: "👁️" }, { label: "Gestuelle", value: liveVisual.gestuelle, icon: "👐" }, { label: "Sourire", value: liveVisual.sourire, icon: "😊" }].map((ind, i) => {
                       const col = ind.value >= 70 ? "#10b981" : ind.value >= 40 ? COLOR_GOLD : ind.value >= 20 ? "#a8893f" : "#9ba3b4";
                       return (
                         <div key={i}>
@@ -1198,6 +1257,54 @@ export default function App() {
         )}
       </div>
 
+      {/* ===== MODAL CHOIX DES SOURCES ===== */}
+      {showDeviceModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "#111", border: "1px solid #c9a96155", borderRadius: 14, padding: 28, width: "100%", maxWidth: 420 }}>
+            <h3 style={{ margin: "0 0 18px", fontSize: 18, fontWeight: 700, color: "#c9a961", textAlign: "center" }}>Choix des sources</h3>
+
+            <label style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>Microphone</label>
+            <select
+              value={selectedAudioId}
+              onChange={e => setSelectedAudioId(e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", background: "#1a1a1a", border: "1px solid #c9a96144", borderRadius: 8, color: "#f5f1e8", fontSize: 14, marginBottom: 16, outline: "none" }}
+            >
+              {audioDevices.length === 0
+                ? <option value="">Micro par défaut</option>
+                : audioDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || "Microphone " + (audioDevices.indexOf(d) + 1)}</option>)
+              }
+            </select>
+
+            <label style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 }}>Caméra</label>
+            <select
+              value={selectedVideoId}
+              onChange={e => setSelectedVideoId(e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", background: "#1a1a1a", border: "1px solid #c9a96144", borderRadius: 8, color: "#f5f1e8", fontSize: 14, marginBottom: 24, outline: "none" }}
+            >
+              {videoDevices.length === 0
+                ? <option value="">Caméra par défaut</option>
+                : videoDevices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || "Caméra " + (videoDevices.indexOf(d) + 1)}</option>)
+              }
+            </select>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setShowDeviceModal(false)}
+                style={{ flex: 1, padding: "11px 0", borderRadius: 8, border: "1px solid #333", background: "transparent", color: "#9ca3af", cursor: "pointer", fontSize: 14 }}
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => { setShowDeviceModal(false); requestPermissions(selectedAudioId, selectedVideoId); }}
+                style={{ flex: 2, padding: "11px 0", borderRadius: 8, border: "none", background: "#c9a961", color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 14 }}
+              >
+                Lancer l'analyse →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ===== MODAL CHANGEMENT MDP ===== */}
       {showChangePwd && (
         <PasswordModal onClose={() => setShowChangePwd(false)} token={localStorage.getItem("nicolas-ia-token")} />
@@ -1329,8 +1436,8 @@ function PasswordModal({ onClose, token }) {
     if (pwd !== confirm) { setError("Les mots de passe ne correspondent pas."); return; }
     setLoading(true);
     try {
-      const r = await fetch("/auth/me", {
-        method: "PATCH",
+      const r = await fetch(API_BASE + "/auth/me/password", {
+        method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
         body: JSON.stringify({ password: pwd }),
       });
