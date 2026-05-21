@@ -34,6 +34,9 @@ function useIsMobile() {
 let mediapipeVision = null;
 let mediapipeLoadAttempted = false;
 
+const _isStrictChrome = /Chrome\//.test(navigator.userAgent) && !/Edg\//.test(navigator.userAgent);
+const _mpDelegate = _isStrictChrome ? "GPU" : "CPU";
+
 const loadMediaPipe = async () => {
   if (mediapipeVision) return mediapipeVision;
   if (mediapipeLoadAttempted) return null;
@@ -45,15 +48,15 @@ const loadMediaPipe = async () => {
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
       );
       const faceLandmarker = await vision.FaceLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
+        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: _mpDelegate },
         outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 1,
       });
       const handLandmarker = await vision.HandLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: "GPU" },
+        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: _mpDelegate },
         runningMode: "VIDEO", numHands: 2,
       });
       const poseLandmarker = await vision.PoseLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate: "GPU" },
+        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate: _mpDelegate },
         runningMode: "VIDEO", numPoses: 1,
       });
       mediapipeVision = { faceLandmarker, handLandmarker, poseLandmarker };
@@ -642,7 +645,7 @@ export default function App() {
         transcriptRef.current = "";
         setMicTestWord("bypass");
       }
-    }, 6000);
+    }, 3500);
 
     micTestRecRef.current = { _check: check, _bypass: bypass };
   };
@@ -683,12 +686,15 @@ export default function App() {
     stoppingRef.current = false;
     recordingTimeRef.current = 0;
     chunksRef.current = []; capturedFramesRef.current = []; audioLevelHistoryRef.current = [];
-    const audioStream = new MediaStream(stream.getAudioTracks());
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-    const mr = new MediaRecorder(audioStream, { mimeType });
-    mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    mr.start(1000);
-    mediaRecorderRef.current = mr;
+    try {
+      const audioStream = new MediaStream(stream.getAudioTracks());
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" :
+        MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+      const mr = new MediaRecorder(audioStream, { mimeType });
+      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.start(1000);
+      mediaRecorderRef.current = mr;
+    } catch (e) { console.warn("MediaRecorder:", e); mediaRecorderRef.current = null; }
     transcriptRef.current = ""; transcriptStateRef.current.recording = true;
     setSoundDetected(false); setLiveWordCount(0);
     if (recognitionRef.current?._resetAccumulator) recognitionRef.current._resetAccumulator();
@@ -1033,8 +1039,8 @@ export default function App() {
                 ))}
               </div>
               <label style={styles.label}><Clock size={12} /> Durée prévue</label>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: isMobile ? 6 : 8, marginBottom: 12 }}>
-                {[{ val: "1", label: "1 min" }, { val: "2", label: "2 min" }, { val: "3", label: "3 min" }, { val: "5", label: "5 min" }, { val: "10", label: "10 min" }].map((d) => (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: isMobile ? 6 : 8, marginBottom: 12 }}>
+                {[{ val: "1", label: "1 min" }, { val: "2", label: "2 min" }, { val: "3", label: "3 min" }, { val: "5", label: "5 min" }].map((d) => (
                   <button key={d.val} onClick={() => setDureeMin(d.val)}
                     style={{ ...styles.selectOption, ...(dureeMin === d.val ? styles.selectOptionActive : {}), textAlign: "center", ...(isMobile ? { padding: "10px 4px", fontSize: 12 } : {}) }}>
                     {d.label}
@@ -1173,7 +1179,7 @@ export default function App() {
                     <div style={{ marginBottom: 14, padding: "10px 14px", background: "#f59e0b11", border: "1px solid #f59e0b44", borderRadius: 8 }}>
                       <div style={{ fontSize: isMobile ? 12 : 13, color: "#fcd34d", fontWeight: 600, marginBottom: 4 }}>⚠️ Aucun mot détecté</div>
                       <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.5 }}>
-                        Vérifiez vos écouteurs et les permissions micro. Vous pouvez quand même lancer l'analyse.
+                        La reconnaissance vocale en temps réel est limitée sur ce navigateur/mode de navigation. Votre micro est bien actif — l'analyse sera transcrite automatiquement.
                       </div>
                     </div>
                   )}
