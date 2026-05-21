@@ -618,40 +618,67 @@ export default function App() {
   const startMicTest = () => {
     setMicTestPhase(true);
     setMicTestWord(false);
-    // Utilise la reconnaissance principale déjà active
-    // Active le flag recording pour que onresult écrive dans transcriptRef
     transcriptStateRef.current.recording = true;
     recognitionRef.current?._resetAccumulator?.();
     transcriptRef.current = "";
 
     let detected = false;
-    const check = setInterval(() => {
-      if (transcriptRef.current.trim().length > 0) {
-        detected = true;
-        clearInterval(check);
-        if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
-        transcriptStateRef.current.recording = false;
-        recognitionRef.current?._resetAccumulator?.();
-        transcriptRef.current = "";
-        setMicTestWord(true);
-      }
+    let audioCtx = null;
+    let animFrame = null;
+    let speechCheck = null;
+
+    const onDetected = () => {
+      if (detected) return;
+      detected = true;
+      if (animFrame) cancelAnimationFrame(animFrame);
+      if (audioCtx) try { audioCtx.close(); } catch (_) {}
+      if (speechCheck) clearInterval(speechCheck);
+      if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
+      transcriptStateRef.current.recording = false;
+      recognitionRef.current?._resetAccumulator?.();
+      transcriptRef.current = "";
+      setMicTestWord(true);
+    };
+
+    const cleanup = () => {
+      if (animFrame) cancelAnimationFrame(animFrame);
+      if (audioCtx) try { audioCtx.close(); } catch (_) {}
+      if (speechCheck) clearInterval(speechCheck);
+      animFrame = null; audioCtx = null; speechCheck = null;
+    };
+
+    // Branche 1 : SpeechRecognition (Chrome normal)
+    speechCheck = setInterval(() => {
+      if (transcriptRef.current.trim().length > 0) onDetected();
     }, 200);
 
+    // Branche 2 : AudioContext (tous navigateurs, navigation privée)
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const check = () => {
+        if (detected) return;
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((s, v) => s + v, 0) / data.length;
+        if (avg > 15) onDetected();
+        else animFrame = requestAnimationFrame(check);
+      };
+      animFrame = requestAnimationFrame(check);
+    } catch (_) {}
+
     const bypass = setTimeout(() => {
-      if (!detected) {
-        clearInterval(check);
-        transcriptStateRef.current.recording = false;
-        recognitionRef.current?._resetAccumulator?.();
-        transcriptRef.current = "";
-        setMicTestWord("bypass");
-      }
+      if (!detected) { cleanup(); transcriptStateRef.current.recording = false; setMicTestWord("bypass"); }
     }, 3500);
 
-    micTestRecRef.current = { _check: check, _bypass: bypass };
+    micTestRecRef.current = { _bypass: bypass, _cleanup: cleanup };
   };
 
   const confirmStartRecording = () => {
-    if (micTestRecRef.current?._check) clearInterval(micTestRecRef.current._check);
+    micTestRecRef.current?._cleanup?.();
     if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
     micTestRecRef.current = null;
     // recording = false ici, sera remis à true dans doStartRecording
@@ -667,7 +694,7 @@ export default function App() {
   };
 
   const cancelMicTest = () => {
-    if (micTestRecRef.current?._check) clearInterval(micTestRecRef.current._check);
+    micTestRecRef.current?._cleanup?.();
     if (micTestRecRef.current?._bypass) clearTimeout(micTestRecRef.current._bypass);
     micTestRecRef.current = null;
     transcriptStateRef.current.recording = false;
