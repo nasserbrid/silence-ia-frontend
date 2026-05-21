@@ -495,7 +495,7 @@ export default function App() {
       if (!navigator.mediaDevices?.getUserMedia) { setError("Navigateur non compatible. Utilisez Chrome ou Safari."); setPermissionError(true); setPhase("setup"); return; }
       const mediaStream = await navigator.mediaDevices.getUserMedia({ video: videoId ? { deviceId: { exact: videoId } } : true, audio: { ...(audioId ? { deviceId: { exact: audioId } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000, channelCount: 1, sampleSize: 16 } });
       setStream(mediaStream); setPhase("ready");
-      setTimeout(() => { if (videoRef.current) { videoRef.current.srcObject = mediaStream; videoRef.current.play().catch(() => {}); } setupAudio(mediaStream); initSpeechRecognition(); }, 100);
+      setTimeout(() => { setupAudio(mediaStream); initSpeechRecognition(); }, 100);
     } catch (err) {
       let msg = "Impossible d'accéder à la caméra/micro.";
       if (err.name === "NotAllowedError") msg = "Accès refusé. Autorisez caméra + micro dans les réglages.";
@@ -893,6 +893,12 @@ export default function App() {
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     }).from(container).save();
   };
+
+  useEffect(() => {
+    if (!stream || !videoRef.current) return;
+    videoRef.current.srcObject = stream;
+    videoRef.current.play().catch(() => {});
+  }, [stream]);
 
   useEffect(() => () => {
     stream?.getTracks().forEach((t) => t.stop());
