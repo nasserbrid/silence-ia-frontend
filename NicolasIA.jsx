@@ -1118,14 +1118,10 @@ export default function App() {
             </div>
 
             {phase === "recording" && (<>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: isMobile ? 8 : 12, marginTop: isMobile ? 8 : 16 }}>
-                <div style={{ padding: isMobile ? 9 : 12, borderRadius: 10, background: soundDetected ? "#22c55e1a" : "#dc26261a", border: "1px solid " + (soundDetected ? "#22c55e66" : "#dc262666"), display: "flex", alignItems: "center", gap: 8 }}>
-                  <Mic size={15} color={soundDetected ? "#86efac" : "#fca5a5"} />
-                  <div style={{ fontSize: isMobile ? 11 : 12, fontWeight: 600 }}>{soundDetected ? "Son capté" : "Aucun son"}</div>
-                </div>
-                <div style={{ padding: isMobile ? 9 : 12, borderRadius: 10, background: liveWordCount > 5 ? "#22c55e1a" : "#c9a9611a", border: "1px solid " + (liveWordCount > 5 ? "#22c55e66" : "#c9a96166"), display: "flex", alignItems: "center", gap: 8 }}>
-                  <MessageSquare size={15} color={liveWordCount > 5 ? "#86efac" : COLOR_GOLD} />
-                  <div style={{ fontSize: isMobile ? 11 : 12, fontWeight: 600 }}>{liveWordCount} mot{liveWordCount > 1 ? "s" : ""}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: isMobile ? 8 : 12, marginTop: isMobile ? 8 : 16 }}>
+                <div style={{ padding: isMobile ? 9 : 12, borderRadius: 10, background: "#22c55e1a", border: "1px solid #22c55e66", display: "flex", alignItems: "center", gap: 8 }}>
+                  <Mic size={15} color="#86efac" />
+                  <div style={{ fontSize: isMobile ? 11 : 12, fontWeight: 600 }}>Enregistrement actif</div>
                 </div>
               </div>
 
@@ -1167,15 +1163,6 @@ export default function App() {
                 );
               })()}
 
-              {recordingTime >= 30 && liveWordCount === 0 && (
-                <div style={{ marginTop: isMobile ? 8 : 12, padding: isMobile ? "10px 12px" : "12px 16px", background: "#dc262611", border: "1px solid #dc262666", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 10 }}>
-                  <AlertCircle size={16} color="#fca5a5" />
-                  <div>
-                    <div style={{ fontSize: isMobile ? 11 : 12, fontWeight: 700, color: "#fca5a5", marginBottom: 3 }}>⚠️ Aucun mot capté pour l'instant</div>
-                    <div style={{ fontSize: isMobile ? 11 : 12, color: COLOR_TEXT_MUTED, lineHeight: 1.5 }}>Vérifiez que le micro est autorisé et parlez suffisamment près. Des <strong style={{ color: COLOR_GOLD_LIGHT }}>écouteurs avec micro</strong> améliorent fortement la capture.</div>
-                  </div>
-                </div>
-              )}
             </>)}
 
             <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: isMobile ? 12 : 24 }}>
