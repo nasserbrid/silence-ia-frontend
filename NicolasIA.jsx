@@ -354,7 +354,6 @@ export default function App() {
   const recordingTimeRef = useRef(0);
   const micTestRecRef = useRef(null);
 
-  const isChromeBased = !!window.chrome && /Chrome/.test(navigator.userAgent);
   const [showChangePwd, setShowChangePwd] = useState(false);
   const [adminUsers, setAdminUsers] = useState([]);
   const [showDeviceModal, setShowDeviceModal] = useState(false);
@@ -1016,11 +1015,6 @@ export default function App() {
                 <h2 style={{ fontSize: isMobile ? 19 : 26, fontWeight: 700, margin: "0 0 5px" }}>Préparons votre session</h2>
                 <p style={{ fontSize: isMobile ? 12 : 14, color: COLOR_TEXT_MUTED, margin: 0 }}>Quelques détails pour personnaliser l'analyse</p>
               </div>
-              {!isChromeBased && (
-                <div style={{ background: "#7c3a00", color: "#fff", padding: "10px 16px", borderRadius: 8, marginBottom: 16, fontSize: 14, textAlign: "center" }}>
-                  ⚠️ La transcription fonctionne uniquement sur <strong>Google Chrome</strong>. Veuillez changer de navigateur avant de continuer.
-                </div>
-              )}
               <label style={styles.label}><MessageSquare size={12} /> Type de discours</label>
               {/* Mobile : 2 colonnes / Desktop : auto-fill — seul le gridTemplateColumns change */}
               <div style={{ ...styles.selectGrid, ...(isMobile ? { gridTemplateColumns: "1fr 1fr", gap: 8 } : {}) }}>
